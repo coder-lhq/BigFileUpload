@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>bigfileuplaod</title>
+  </head>
+  <body>
+    <input type="file" id="file" />
+    <button id="file_id">上传</div>
+  </body>
+  <script type="module">
+
+    import { cutFile } from './js/cutFile.js'
+
+    document.querySelector("#file_id").addEventListener("click", uploadFile);
+
+    async function getUploadedChunks(name) {
+      const res = await fetch(`/file/getUploadedChunks?filename=${name}`)
+      
+      return res.json()
+    }
+
+    /**
+     * 请求并发控制
+     * 
+    */
+    
+    let concurrentRequest = 0;
+
+    const maxConcurrentRequest = 3
+
+    const requestQueue = []
+
+    async function processQueue() {
+      
+      if (concurrentRequest >= maxConcurrentRequest || requestQueue.length === 0) return
+
+      const nextRequest = requestQueue.shift()
+
+      concurrentRequest++
+
+      await nextRequest()
+      
+      concurrentRequest--
+
+      processQueue()
+
+    }
+
+    async function uploadFile() {
+      const fileInput = document.querySelector("#file");
+      const file = fileInput.files[0];
+      if (!file) {
+        alert("请选择一个文件");
+        return 
+      }
+
+      // 防止同名文件重复上传
+      const uploadedchunks = await getUploadedChunks(file.name)
+      // const uploadedchunks = [0, 1, 2]
+
+      const needUploadChunks = []
+      
+      // 得到分片数据
+      await cutFile(file, uploadedchunks, ({chunkIndex, chunkHash, chunkBlob, isUploaded}, chunkCount) => {
+
+        needUploadChunks.push({chunkIndex, chunkHash, chunkBlob, isUploaded})
+
+        // 文件已经全部上传完成，没有进行合并，则执行
+        if (isMergeChunks(needUploadChunks, chunkCount)) {
+          
+          mergeChunks(file.name)
+
+          return
+        }
+
+        // 当 blob 有值时，blob 有可能为空
+        if (chunkBlob) {
+
+          requestQueue.push(uploadChunk.bind(this,chunkIndex, chunkHash, chunkBlob, file.name, needUploadChunks, chunkCount))
+
+          processQueue()
+        }
+      })
+    }
+
+
+    async function uploadChunk(chunkIndex, chunkHash, chunkBlob, fileName, chunks, chunkCount) {
+
+      // blob 为 undefined 时
+      if (!chunkBlob) return;
+
+      const formData = new FormData()
+      formData.append('chunkIndex', chunkIndex)
+      formData.append('chunkHash', chunkHash)
+      formData.append('filename', fileName)
+      formData.append('chunkBlob', chunkBlob)
+
+      const res = await fetch('/file/upload', {
+        method: 'POST',
+        body: formData
+      })
+
+      if (!res.ok) {
+        console.log('分片文件上传失败！')
+        return
+      }
+
+
+      const index = chunks.findIndex(item => chunkIndex === item.chunkIndex)
+
+      chunks[index].isUploaded = true
+      
+      // 全部上传完成
+      if (isMergeChunks(chunks, chunkCount)) mergeChunks(fileName)
+      
+    }
+
+    // 是否需要进行合并
+    // 存储的切片数
+    // 根据切片大小得到的总切片数量
+    function isMergeChunks(chunks, chunkCount) {
+
+      if (chunks.length === chunkCount) {
+        const isAllUploaded = chunks.every((data) => data.isUploaded)
+
+        return isAllUploaded
+      }
+
+      return false
+
+    }
+
+
+    async function mergeChunks(filename) {
+      console.log(filename);
+      
+      const res = await fetch('/file/merge', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          filename
+        })
+      })
+
+      if (!res.ok) {
+        alert('文件合并失败！')
+        return
+      }
+
+      alert('文件合并成功！')
+    }
+
+  </script>
+</html>
